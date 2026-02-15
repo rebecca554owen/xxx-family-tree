@@ -23,20 +23,50 @@ function MemberAvatar({ member }: { member: Member }) {
   );
 }
 
+const SIDE_OFFSETS = [20, 50, 80] as const;
+
+function renderHandles(type: "source" | "target", side: "top" | "right" | "bottom" | "left") {
+  return SIDE_OFFSETS.map((offset, index) => {
+    const slot = index + 1;
+    const id = `${type === "source" ? "s" : "t"}-${side}-${slot}`;
+    const style =
+      side === "top" || side === "bottom" ? { left: `${offset}%` } : { top: `${offset}%` };
+    const position =
+      side === "top"
+        ? Position.Top
+        : side === "right"
+          ? Position.Right
+          : side === "bottom"
+            ? Position.Bottom
+            : Position.Left;
+
+    return (
+      <Handle
+        key={id}
+        id={id}
+        type={type}
+        position={position}
+        className={`member-handle member-handle--${side}`}
+        style={style}
+      />
+    );
+  });
+}
+
 export function UnitNode({ data, selected }: NodeProps) {
   const nodeData = data as UnitNodeData;
   const members = nodeData.members;
   const canSwap = Boolean(nodeData.canSwap && typeof nodeData.onSwap === "function");
   return (
     <div className={`node-card ink-fade relative w-[300px] rounded p-3 ${selected ? "is-selected" : ""}`}>
-      <Handle id="t-top" type="target" position={Position.Top} className="member-handle" />
-      <Handle id="t-right" type="target" position={Position.Right} className="member-handle" />
-      <Handle id="t-bottom" type="target" position={Position.Bottom} className="member-handle" />
-      <Handle id="t-left" type="target" position={Position.Left} className="member-handle" />
-      <Handle id="s-top" type="source" position={Position.Top} className="member-handle" />
-      <Handle id="s-right" type="source" position={Position.Right} className="member-handle" />
-      <Handle id="s-bottom" type="source" position={Position.Bottom} className="member-handle" />
-      <Handle id="s-left" type="source" position={Position.Left} className="member-handle" />
+      {renderHandles("target", "top")}
+      {renderHandles("target", "right")}
+      {renderHandles("target", "bottom")}
+      {renderHandles("target", "left")}
+      {renderHandles("source", "top")}
+      {renderHandles("source", "right")}
+      {renderHandles("source", "bottom")}
+      {renderHandles("source", "left")}
       {canSwap && (
         <button
           className="absolute right-2 top-2 rounded border border-bronze/40 bg-[#f8f1df] px-2 py-1 text-xs text-soot hover:border-cinnabar hover:text-cinnabar"

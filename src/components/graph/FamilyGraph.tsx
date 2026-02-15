@@ -1,4 +1,4 @@
-﻿import { useEffect, useMemo, useState, type MouseEvent as ReactMouseEvent } from "react";
+﻿import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
 import {
   Background,
   ConnectionMode,
@@ -27,15 +27,6 @@ type FamilyGraphProps = {
   readOnly?: boolean;
 };
 
-type PendingUnitConnection = {
-  source: string;
-  target: string;
-} | null;
-
-const unitRelationLabels: Record<typeof REL_PARENT_CHILD | typeof REL_SIBLING, string> = {
-  parent_child: "父母/子女",
-  sibling: "兄弟姐妹"
-};
 
 function unitGeneration(
   unitId: string,
@@ -79,24 +70,43 @@ function calculateUnitLayout(
   return positions;
 }
 
-function pickHandles(
-  sourceId: string,
-  targetId: string,
-  positions: Record<string, { x: number; y: number }>
-): { sourceHandle?: string; targetHandle?: string } {
-  const source = positions[sourceId];
-  const target = positions[targetId];
-  if (!source || !target) return {};
-  const sourceCenterX = source.x + 150;
-  const sourceCenterY = source.y + 80;
-  const targetCenterX = target.x + 150;
-  const targetCenterY = target.y + 80;
-  const dx = targetCenterX - sourceCenterX;
-  const dy = targetCenterY - sourceCenterY;
-  if (Math.abs(dx) > Math.abs(dy) * 1.2) {
-    return dx > 0 ? { sourceHandle: "s-right", targetHandle: "t-left" } : { sourceHandle: "s-left", targetHandle: "t-right" };
+function hashSlot(input: string, mod: number): number {
+  let hash = 0;
+  for (let i = 0; i < input.length; i += 1) {
+    hash = (hash * 31 + input.charCodeAt(i)) >>> 0;
   }
-  return dy > 0 ? { sourceHandle: "s-bottom", targetHandle: "t-top" } : { sourceHandle: "s-top", targetHandle: "t-bottom" };
+  return hash % mod;
+}
+
+function inferRelationType(connection: Connection): typeof REL_PARENT_CHILD | typeof REL_SIBLING {
+  const sourceHandle = connection.sourceHandle ?? "";
+  const targetHandle = connection.targetHandle ?? "";
+  const isLateral =
+    (sourceHandle.includes("-left-") || sourceHandle.includes("-right-")) &&
+    (targetHandle.includes("-left-") || targetHandle.includes("-right-"));
+  return isLateral ? REL_SIBLING : REL_PARENT_CHILD;
+}
+
+function resolveRelationHandles(
+  relation: { id: string; fromUnitId: string; toUnitId: string; relationType: typeof REL_PARENT_CHILD | typeof REL_SIBLING },
+  positions: Record<string, { x: number; y: number }>
+): { sourceHandle?: string; targetHandle?: string; lane: number } {
+  if (relation.relationType === REL_PARENT_CHILD) {
+    const sourceSlot = hashSlot(`${relation.id}:source`, 3) + 1;
+    const targetSlot = hashSlot(`${relation.id}:target`, 3) + 1;
+    return {
+      sourceHandle: `s-bottom-${sourceSlot}`,
+      targetHandle: `t-top-${targetSlot}`,
+      lane: sourceSlot - 2
+    };
+  }
+
+  const sourcePos = positions[relation.fromUnitId];
+  const targetPos = positions[relation.toUnitId];
+  const leftToRight = !sourcePos || !targetPos ? true : sourcePos.x <= targetPos.x;
+  return leftToRight
+    ? { sourceHandle: "s-right-2", targetHandle: "t-left-2", lane: 0 }
+    : { sourceHandle: "s-left-2", targetHandle: "t-right-2", lane: 0 };
 }
 
 function resolveNonOverlapX(
@@ -155,11 +165,9 @@ export function FamilyGraph({ readOnly = false }: FamilyGraphProps) {
 
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
   const [reactFlowInstance, setReactFlowInstance] = useState<ReactFlowInstance | null>(null);
-  const [pendingConnection, setPendingConnection] = useState<PendingUnitConnection>(null);
-  const [pendingRelationType, setPendingRelationType] = useState<typeof REL_PARENT_CHILD | typeof REL_SIBLING>(
-    REL_PARENT_CHILD
-  );
   const [connectMessage, setConnectMessage] = useState("");
+  const connectingRef = useRef(false);
+  const connectedRef = useRef(false);
 
   const memberMap = useMemo(() => new Map(members.map((m) => [m.id, m])), [members]);
   const memberGenerationMap = useMemo(() => new Map(members.map((m) => [m.id, m.generation ?? 99])), [members]);
@@ -441,13 +449,13 @@ export function FamilyGraph({ readOnly = false }: FamilyGraphProps) {
   ]);
 
   const edges = useMemo<Edge[]>(() => {
-    return visibleRelations.map((rel, idx) => {
-      const handles = pickHandles(rel.fromUnitId, rel.toUnitId, positions);
+    return visibleRelations.map((rel) => {
+      const handles = resolveRelationHandles(rel, positions);
       const relationType = toLegacyRelationType(rel.relationType);
       const style =
         relationType === "sibling"
-          ? { stroke: "#6D6255", strokeWidth: 1.7, strokeDasharray: "2 5", strokeLinecap: "round" }
-          : { stroke: "#4D4235", strokeWidth: 1.45, strokeLinecap: "round" };
+          ? { stroke: "#6D6255", strokeWidth: 1.8, strokeDasharray: "3 6", strokeLinecap: "round" }
+          : { stroke: "#4D4235", strokeWidth: 1.5, strokeLinecap: "round" };
       return {
         id: rel.id,
         source: rel.fromUnitId,
@@ -458,10 +466,11 @@ export function FamilyGraph({ readOnly = false }: FamilyGraphProps) {
         selectable: true,
         reconnectable: true,
         selected: rel.id === selectedEdgeId,
-        interactionWidth: 44,
+        interactionWidth: 64,
+        zIndex: 20,
         markerEnd: relationType === "parent" ? { type: MarkerType.ArrowClosed, color: "#4D4235" } : undefined,
         style,
-        data: { relationType, lane: (idx % 3) - 1 }
+        data: { relationType, lane: handles.lane }
       } as Edge;
     });
   }, [visibleRelations, positions, selectedEdgeId]);
@@ -479,11 +488,23 @@ export function FamilyGraph({ readOnly = false }: FamilyGraphProps) {
 
   const handleConnect = (connection: Connection) => {
     if (readOnly) return;
+    connectedRef.current = true;
     const source = connection.source;
     const target = connection.target;
-    if (!source || !target) return;
-    setPendingConnection({ source, target });
-    setPendingRelationType(REL_PARENT_CHILD);
+    if (!source || !target) {
+      setConnectMessage("连接失败：请从家庭单元锚点拖拽到另一个单元锚点。");
+      return;
+    }
+    const relationType = inferRelationType(connection);
+    const result = addUnitRelation({
+      fromUnitId: source,
+      toUnitId: target,
+      relationType
+    });
+    if (!result.ok) {
+      setConnectMessage(result.reason);
+      return;
+    }
     setConnectMessage("");
   };
 
@@ -505,24 +526,17 @@ export function FamilyGraph({ readOnly = false }: FamilyGraphProps) {
     setSelectedEdgeId(oldEdge.id);
   };
 
-  const submitPendingConnection = () => {
-    if (!pendingConnection) return;
-    const result = addUnitRelation({
-      fromUnitId: pendingConnection.source,
-      toUnitId: pendingConnection.target,
-      relationType: pendingRelationType
-    });
-    if (!result.ok) {
-      setConnectMessage(result.reason);
-      return;
-    }
-    setPendingConnection(null);
+  const handleConnectStart = () => {
+    connectingRef.current = true;
+    connectedRef.current = false;
     setConnectMessage("");
   };
 
   const handleConnectEnd = () => {
-    if (!pendingConnection) {
-      setConnectMessage("");
+    if (!connectingRef.current) return;
+    connectingRef.current = false;
+    if (!connectedRef.current) {
+      setConnectMessage("未连接成功：请把鼠标拖到高亮锚点后再松开。");
     }
   };
 
@@ -593,14 +607,14 @@ export function FamilyGraph({ readOnly = false }: FamilyGraphProps) {
         onEdgeClick={(_e, edge) => setSelectedEdgeId(edge.id)}
         onPaneClick={() => {
           setSelectedEdgeId(null);
-          setPendingConnection(null);
           setConnectMessage("");
         }}
+        onConnectStart={handleConnectStart}
         onConnect={handleConnect}
         onConnectEnd={handleConnectEnd}
         onReconnect={handleReconnect}
-        reconnectRadius={36}
-        connectionRadius={36}
+        reconnectRadius={64}
+        connectionRadius={56}
         nodesDraggable={!readOnly && viewMode === "overview"}
         nodesConnectable={!readOnly}
         edgesReconnectable={!readOnly}
@@ -608,6 +622,8 @@ export function FamilyGraph({ readOnly = false }: FamilyGraphProps) {
         connectionMode={ConnectionMode.Loose}
         snapToGrid={false}
         onlyRenderVisibleElements
+        elevateEdgesOnSelect
+        defaultEdgeOptions={{ zIndex: 20 }}
         elementsSelectable
       >
         <Background gap={20} size={1.1} color="#d2c4a8" />
@@ -624,40 +640,14 @@ export function FamilyGraph({ readOnly = false }: FamilyGraphProps) {
               setSelectedEdgeId(null);
             }}
           >
-            删除该关系
+            删除关系
           </button>
         </div>
       )}
 
-      {pendingConnection && !readOnly && (
-        <div className="panel-reveal absolute right-4 top-4 z-20 w-72 rounded border border-bronze/55 bg-parchment p-3 shadow-panel-soft">
-          <p className="mb-2 text-sm text-ink">选择新关系类型</p>
-          <select
-            value={pendingRelationType}
-            onChange={(event) => setPendingRelationType(event.target.value as typeof REL_PARENT_CHILD | typeof REL_SIBLING)}
-            className="w-full rounded border border-bronze/45 bg-[#fbf6ea] px-2 py-2 text-sm text-ink outline-none focus:border-cinnabar"
-          >
-            {Object.entries(unitRelationLabels).map(([value, label]) => (
-              <option key={value} value={value}>
-                {label}
-              </option>
-            ))}
-          </select>
-          {connectMessage && <p className="mt-2 text-xs text-cinnabar">{connectMessage}</p>}
-          <div className="mt-3 grid grid-cols-2 gap-2">
-            <button className="tool-btn text-center" onClick={submitPendingConnection}>
-              确认
-            </button>
-            <button
-              className="tool-btn text-center"
-              onClick={() => {
-                setPendingConnection(null);
-                setConnectMessage("");
-              }}
-            >
-              取消
-            </button>
-          </div>
+      {connectMessage && !readOnly && (
+        <div className="panel-reveal absolute right-4 top-4 z-20 w-80 rounded border border-bronze/55 bg-parchment p-3 shadow-panel-soft">
+          <p className="text-sm text-cinnabar">{connectMessage}</p>
         </div>
       )}
     </div>
