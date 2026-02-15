@@ -106,18 +106,50 @@ body::before {
 }
 
 .member-handle {
-  width: 14px !important;
-  height: 14px !important;
+  width: 16px !important;
+  height: 16px !important;
   border-radius: 9999px !important;
   border: 1px solid rgba(248, 241, 224, 0.95) !important;
-  opacity: 0.75;
-  transition: opacity 180ms ease, transform 180ms ease;
+  background-color: rgba(40, 37, 31, 0.86) !important;
+  box-shadow:
+    0 0 0 5px rgba(247, 237, 215, 0.75),
+    0 2px 6px rgba(31, 27, 22, 0.32);
+  opacity: 0.78;
+  transition: opacity 180ms ease, transform 180ms ease, box-shadow 180ms ease, background-color 180ms ease;
+  cursor: crosshair;
 }
 
 .node-card:hover .member-handle,
 .node-card.is-selected .member-handle {
-  opacity: 0.9;
-  transform: scale(1.08);
+  opacity: 1;
+  transform: scale(1.12);
+}
+
+.react-flow__handle-connecting {
+  background-color: rgba(166, 58, 46, 0.95) !important;
+  box-shadow:
+    0 0 0 7px rgba(166, 58, 46, 0.2),
+    0 0 0 3px rgba(248, 241, 224, 0.88);
+}
+
+.react-flow__handle-valid {
+  background-color: rgba(84, 120, 63, 0.95) !important;
+  box-shadow:
+    0 0 0 7px rgba(84, 120, 63, 0.22),
+    0 0 0 3px rgba(248, 241, 224, 0.9);
+}
+
+.react-flow__edges {
+  z-index: 20;
+}
+
+.react-flow__edge-path {
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.react-flow__edge.selected .react-flow__edge-path {
+  filter: drop-shadow(0 0 5px rgba(166, 58, 46, 0.58));
 }
 
 .generation-strip {
