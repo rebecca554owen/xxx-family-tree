@@ -134,6 +134,38 @@ export async function loadUnitSnapshot(treeId: string): Promise<UnitSnapshot> {
   };
 }
 
+export async function persistFamilyUnitInsert(unit: {
+  id: string;
+  tree_id: string;
+  name: string;
+  generation?: number;
+}): Promise<void> {
+  if (!supabase) return;
+  const { error } = await supabase.from("family_units").insert(unit);
+  if (error) throw error;
+}
+
+export async function persistFamilyUnitDelete(unitId: string): Promise<void> {
+  if (!supabase) return;
+  const { error } = await supabase
+    .from("family_units")
+    .delete()
+    .eq("id", unitId);
+  if (error) throw error;
+}
+
+export async function persistFamilyUnitMemberInsert(unitMember: {
+  unit_id: string;
+  member_id: string;
+  role: "single" | "partner1" | "partner2";
+}): Promise<void> {
+  if (!supabase) return;
+  const { error } = await supabase
+    .from("family_unit_members")
+    .insert(unitMember);
+  if (error) throw error;
+}
+
 export async function persistUnitRelationInsert(
   relation: UnitRelation,
 ): Promise<void> {

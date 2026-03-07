@@ -20,6 +20,9 @@ import type {
   UnitRelation,
 } from "../types/familyUnit";
 import {
+  persistFamilyUnitInsert,
+  persistFamilyUnitDelete,
+  persistFamilyUnitMemberInsert,
   persistUnitRelationDelete,
   persistUnitRelationInsert,
   persistUnitRelationReconnect,
@@ -245,19 +248,53 @@ export const useFamilyStore = create<FamilyState>((set, get) => ({
 
   addMember: (input) => {
     const treeId = get().treeId ?? "";
-    const newId = `m${Date.now()}`;
+    const ts = Date.now();
+    const newId = `m${ts}`;
+    const unitId = `u${ts}`;
     const member: Member = { id: newId, ...input };
+    const newUnit: FamilyUnit = {
+      id: unitId,
+      name: member.name,
+      generation: member.generation,
+    };
+    const newUnitMember: FamilyUnitMember = {
+      unitId,
+      memberId: newId,
+      role: "single",
+    };
+
     set((state) => ({
       members: [...state.members, member],
+      units: [...state.units, newUnit],
+      unitMembers: [...state.unitMembers, newUnitMember],
       selectedMemberId: newId,
+      selectedUnitId: unitId,
       panelMode: "view",
     }));
 
-    void persistMemberInsert(member, treeId).catch((error) => {
-      set({
-        syncError: error instanceof Error ? error.message : "成员新增同步失败",
+    // Persist in FK order: member → unit → unit_member
+    void persistMemberInsert(member, treeId)
+      .then(() =>
+        persistFamilyUnitInsert({
+          id: unitId,
+          tree_id: treeId,
+          name: member.name,
+          generation: member.generation,
+        }),
+      )
+      .then(() =>
+        persistFamilyUnitMemberInsert({
+          unit_id: unitId,
+          member_id: newId,
+          role: "single",
+        }),
+      )
+      .catch((error) => {
+        set({
+          syncError:
+            error instanceof Error ? error.message : "成员新增同步失败",
+        });
       });
-    });
     return newId;
   },
 
@@ -276,36 +313,68 @@ export const useFamilyStore = create<FamilyState>((set, get) => ({
   },
 
   deleteMember: (memberId) => {
-    set((state) => ({
-      nodePositions: (() => {
-        const next = Object.fromEntries(
-          Object.entries(state.nodePositions).filter(
-            ([key]) => key !== memberId,
-          ),
-        );
-        saveNodePositions(next);
-        return next;
-      })(),
-      members: state.members.filter((member) => member.id !== memberId),
-      relationships: state.relationships.filter(
-        (relation) =>
-          relation.fromMemberId !== memberId &&
-          relation.toMemberId !== memberId,
-      ),
-      focusMemberId:
-        state.focusMemberId === memberId
-          ? (state.members.find((member) => member.id !== memberId)?.id ?? null)
-          : state.focusMemberId,
-      selectedMemberId:
-        state.selectedMemberId === memberId ? null : state.selectedMemberId,
-      panelMode: "view",
-    }));
+    const state = get();
+    // Find the unit containing this member
+    const unitMemberEntry = state.unitMembers.find(
+      (um) => um.memberId === memberId,
+    );
+    const unitId = unitMemberEntry?.unitId ?? null;
+    // Delete the unit if this was its only member
+    const isOnlyMemberInUnit =
+      unitId !== null &&
+      state.unitMembers.filter((um) => um.unitId === unitId).length === 1;
 
-    void persistMemberDelete(memberId).catch((error) => {
-      set({
-        syncError: error instanceof Error ? error.message : "成员删除同步失败",
-      });
+    set((prev) => {
+      const nextPositions = Object.fromEntries(
+        Object.entries(prev.nodePositions).filter(([k]) => k !== memberId),
+      );
+      saveNodePositions(nextPositions);
+      return {
+        nodePositions: nextPositions,
+        members: prev.members.filter((m) => m.id !== memberId),
+        unitMembers: prev.unitMembers.filter((um) => um.memberId !== memberId),
+        units: isOnlyMemberInUnit
+          ? prev.units.filter((u) => u.id !== unitId)
+          : prev.units,
+        unitRelations: isOnlyMemberInUnit
+          ? prev.unitRelations.filter(
+              (r) => r.fromUnitId !== unitId && r.toUnitId !== unitId,
+            )
+          : prev.unitRelations,
+        relationships: prev.relationships.filter(
+          (r) => r.fromMemberId !== memberId && r.toMemberId !== memberId,
+        ),
+        focusMemberId:
+          prev.focusMemberId === memberId
+            ? (prev.members.find((m) => m.id !== memberId)?.id ?? null)
+            : prev.focusMemberId,
+        focusUnitId:
+          isOnlyMemberInUnit && prev.focusUnitId === unitId
+            ? (prev.units.find((u) => u.id !== unitId)?.id ?? null)
+            : prev.focusUnitId,
+        selectedMemberId:
+          prev.selectedMemberId === memberId ? null : prev.selectedMemberId,
+        selectedUnitId:
+          isOnlyMemberInUnit && prev.selectedUnitId === unitId
+            ? null
+            : prev.selectedUnitId,
+        panelMode: "view",
+      };
     });
+
+    // In DB: deleting member cascades family_unit_members; then delete orphaned unit
+    void persistMemberDelete(memberId)
+      .then(() =>
+        isOnlyMemberInUnit && unitId
+          ? persistFamilyUnitDelete(unitId)
+          : Promise.resolve(),
+      )
+      .catch((error) => {
+        set({
+          syncError:
+            error instanceof Error ? error.message : "成员删除同步失败",
+        });
+      });
   },
 
   addRelationship: ({ fromMemberId, toMemberId, relationType }) => {
